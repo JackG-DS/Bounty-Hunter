@@ -33,20 +33,31 @@ import {
 } from '@/lib/storage';
 import { getLocalDateString, getTomorrowDateString, getLogicalDate, formatDateComponents } from '@/lib/dateUtils';
 import {
-  getSupabaseClient,
   getAuthSession,
   signInWithEmail,
   signUpWithEmail,
   signOutUser,
-  rolloverIncompleteTasksRPC,
-  pullBonusTaskRPC,
-  clearCompletedTasksRPC,
-  clearAllDailyTasksRPC,
-  generateDueRecurringTasksRPC,
-  pushTemplateToDailyRPC,
-  addTaskForTomorrowRPC,
-  moveTaskToTodayRPC,
-} from '@/lib/supabaseClient';
+} from '@/lib/auth/client';
+import {
+  getUserSettings,
+  updateUserSettings,
+  rolloverIncompleteTasks,
+  generateDueRecurringTasks,
+  getTasksForDate as getTasksForDateAction,
+  createTask,
+  updateTask,
+  deleteTask,
+  reorderTasks,
+  pullBonusTask,
+  pushTemplateToDaily,
+  moveTaskToDate,
+  clearAllDailyTasks as clearAllDailyTasksAction,
+  createPoolTask,
+  deletePoolTask as deletePoolTaskAction,
+  createRecurringTask,
+  updateRecurringTask as updateRecurringTaskAction,
+  deleteRecurringTask as deleteRecurringTaskAction,
+} from '@/app/actions/tasks';
 
 interface TaskContextType {
   // Navigation & View
@@ -277,25 +288,16 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const updated = { ...prev, ...newSettings };
         StorageService.saveSettings(updated);
 
-        // Sync with public.user_settings if authenticated
+        // Sync with public.user_settings in Neon Postgres if authenticated
         if (supabaseConfig.enabled && authUser.isAuthenticated && authUser.id) {
-          const client = getSupabaseClient(supabaseConfig);
-          if (client) {
-            client
-              .from('user_settings')
-              .upsert({
-                user_id: authUser.id,
-                reset_time: updated.reset_time || '04:00',
-                last_reset_date: updated.last_reset_date || null,
-                day_ended_date: updated.day_ended_date || null,
-                updated_at: new Date().toISOString(),
-              })
-              .then(({ error }) => {
-                if (error) {
-                  console.warn('[TaskContext] Error saving user_settings:', error.message);
-                }
-              });
-          }
+          updateUserSettings({
+            reset_time: updated.reset_time || '04:00',
+            last_reset_date: updated.last_reset_date || null,
+            day_ended_date: updated.day_ended_date || null,
+            total_bounty_claimed: updated.total_bounty_claimed,
+          }).catch((error: unknown) => {
+            console.warn('[TaskContext] Error saving user_settings:', error);
+          });
         }
 
         return updated;
@@ -323,10 +325,10 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [updateSettings]);
 
   // =========================================================================
-  // Manual & On-Load Refresh Method (Only Reads from Supabase)
+  // Manual & On-Load Refresh Method (Reads from Neon Postgres)
   // =========================================================================
   const refreshTasks = useCallback(async (overrideUserId?: string) => {
-    if (!supabaseConfig.enabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
+    if (!supabaseConfig.enabled) {
       setIsSyncing(false);
       setSyncStatus('idle');
       return;
@@ -336,13 +338,6 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!targetUserId || targetUserId === 'local-user') {
       setIsSyncing(false);
       setSyncStatus('idle');
-      return;
-    }
-
-    const supabase = getSupabaseClient(supabaseConfig);
-    if (!supabase) {
-      setIsSyncing(false);
-      setSyncStatus('error');
       return;
     }
 
@@ -356,7 +351,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSyncErrorMessage(null);
 
     const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Sync timeout (5s). Database unreachable.')), 5000)
+      setTimeout(() => reject(new Error('Sync timeout (10s). Database unreachable.')), 10000)
     );
 
     try {
@@ -366,35 +361,26 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
           let effectiveLastReset = settings.last_reset_date || '';
           let effectiveDayEnded = settings.day_ended_date || null;
 
-          // 1. Fetch Remote User Settings FIRST so we use the user's configured reset_time
-          try {
-            const { data: userSettingsData } = await supabase
-              .from('user_settings')
-              .select('*')
-              .eq('user_id', targetUserId)
-              .maybeSingle();
+          // 1. Fetch Remote User Settings via Server Action
+          const remoteSettings = await getUserSettings();
+          if (remoteSettings) {
+            effectiveResetTime = (remoteSettings.reset_time || effectiveResetTime || '04:00').slice(0, 5);
+            effectiveLastReset = remoteSettings.last_reset_date || effectiveLastReset || '';
+            effectiveDayEnded = remoteSettings.day_ended_date ?? effectiveDayEnded ?? null;
 
-            if (userSettingsData) {
-              effectiveResetTime = (userSettingsData.reset_time || effectiveResetTime || '04:00').slice(0, 5);
-              effectiveLastReset = userSettingsData.last_reset_date || effectiveLastReset || '';
-              effectiveDayEnded = userSettingsData.day_ended_date ?? effectiveDayEnded ?? null;
-
-              setSettings((prev) => {
-                const merged: UserSettings = {
-                  ...prev,
-                  reset_time: effectiveResetTime,
-                  last_reset_date: effectiveLastReset,
-                  day_ended_date: effectiveDayEnded,
-                };
-                StorageService.saveSettings(merged);
-                return merged;
-              });
-            }
-          } catch (settingsErr) {
-            console.warn('[TaskContext] Optional user_settings fetch skipped:', settingsErr);
+            setSettings((prev) => {
+              const merged: UserSettings = {
+                ...prev,
+                reset_time: effectiveResetTime,
+                last_reset_date: effectiveLastReset,
+                day_ended_date: effectiveDayEnded,
+                total_bounty_claimed: remoteSettings.total_bounty_claimed ?? prev.total_bounty_claimed ?? 0,
+              };
+              StorageService.saveSettings(merged);
+              return merged;
+            });
           }
 
-          // Compute logical Today and Tomorrow using the user's reset_time (e.g. 04:00 AM)
           const localToday = getLocalDateString(new Date(), effectiveResetTime);
           const localTomorrow = getTomorrowDateString(new Date(), effectiveResetTime);
 
@@ -417,58 +403,27 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
           }
 
-          // 3. Call rollover_incomplete_tasks with client's logical localToday (prevents UTC midnight premature rollover!)
+          // 3. Rollover incomplete tasks & generate due recurring tasks via Server Actions
           try {
-            await supabase.rpc('rollover_incomplete_tasks', { p_today: localToday });
+            await rolloverIncompleteTasks(localToday);
           } catch (rolloverErr) {
-            console.warn('[TaskContext] rollover_incomplete_tasks RPC error:', rolloverErr);
+            console.warn('[TaskContext] rolloverIncompleteTasks warning:', rolloverErr);
           }
-
-          // 4. Call generate_due_recurring_tasks with local date parameter
-          try {
-            await supabase.rpc('generate_due_recurring_tasks', { p_today: localToday });
-          } catch (recurringRpcErr) {
-            console.warn('[TaskContext] generate_due_recurring_tasks RPC error:', recurringRpcErr);
-          }
-
-          // 5. Fetch all daily_tasks for the user (today, tomorrow, and historical archive)
-          const { data: allDailyData, error: allDailyError } = await supabase
-            .from('daily_tasks')
-            .select('*')
-            .order('date_assigned', { ascending: false })
-            .order('order_index', { ascending: true });
-
-          if (allDailyError) {
-            console.error('[TaskContext] Fetch error:', allDailyError);
-          }
-
-          let cloudPool: PoolTask[] = [];
-          let cloudRecurring: RecurringTask[] = [];
 
           try {
-            const [poolRes, recurringRes] = await Promise.all([
-              supabase.from('pool_tasks').select('*').order('created_at', { ascending: false }),
-              supabase.from('recurring_tasks').select('*').order('created_at', { ascending: false }),
-            ]);
-
-            if (poolRes.error) {
-              console.error('[TaskContext] Fetch error (pool_tasks):', poolRes.error);
-            } else {
-              cloudPool = poolRes.data || [];
-            }
-
-            if (recurringRes.error) {
-              console.error('[TaskContext] Fetch error (recurring_tasks):', recurringRes.error);
-            } else {
-              cloudRecurring = recurringRes.data || [];
-            }
-          } catch (extraErr) {
-            console.error('[TaskContext] Fetch error (pool/recurring):', extraErr);
+            await generateDueRecurringTasks(localToday);
+          } catch (recurringErr) {
+            console.warn('[TaskContext] generateDueRecurringTasks warning:', recurringErr);
           }
+
+          // 4. Fetch all daily, pool, and recurring tasks via Server Action
+          const cloudData = await getTasksForDateAction(localToday, localTomorrow);
+          const cloudPool: PoolTask[] = cloudData.poolTasks || [];
+          const cloudRecurring: RecurringTask[] = cloudData.recurringTasks || [];
+          const rawCloudDaily: DailyTask[] = cloudData.allDailyTasks || [];
 
           const storedMeta = StorageService.getBountyMetaMap();
           const poolTitleSet = new Set(cloudPool.map((p) => p.title.trim().toLowerCase()));
-          const rawCloudDaily: DailyTask[] = allDailyData || [];
 
           const cloudDaily: DailyTask[] = rawCloudDaily.map((t) => {
             const meta = storedMeta[t.id];
@@ -517,15 +472,13 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
             StorageService.saveBountyLedger(updatedLedger);
           }
 
-          console.log('[TaskContext] Tasks fetched from cloud:', {
+          console.log('[TaskContext] Tasks fetched from Neon Postgres:', {
             totalDailyCount: cloudDaily.length,
             poolCount: cloudPool.length,
             recurringCount: cloudRecurring.length,
           });
 
-          // Disable Offline LocalStorage Overwrite for Authenticated Users:
-          // When a user is authenticated, do NOT merge stale local storage tasks into Supabase query results.
-          // The Supabase database must be the single source of truth upon login.
+          // When a user is authenticated, Neon Postgres is the single source of truth upon login.
           setDailyTasks(cloudDaily);
           StorageService.saveDailyTasks(cloudDaily);
 
@@ -555,6 +508,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
     userId,
     settings.reset_time,
     settings.last_reset_date,
+    settings.day_ended_date,
     checkShouldReset,
     updateSettings,
   ]);
@@ -744,13 +698,13 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSupabaseConfig(loadedSupabase);
     setIsClientReady(true);
 
-    // 2. Check Supabase Auth Session on Mount
-    // Setting authUser triggers the useEffect below which calls refreshTasks() (passing localToday to rollover & recurring RPCs)
-    if (loadedSupabase.enabled && loadedSupabase.url && loadedSupabase.anonKey) {
-      getAuthSession(loadedSupabase)
+    // 2. Check Neon Auth Session on Mount
+    // Setting authUser triggers the useEffect below which calls refreshTasks()
+    if (loadedSupabase.enabled) {
+      getAuthSession()
         .then(async (session) => {
           if (session?.user) {
-            console.log('[TaskContext] User session found on mount:', session.user.id);
+            console.log('[TaskContext] Neon Auth session found on mount:', session.user.id);
             setAuthUser({
               id: session.user.id,
               email: session.user.email || null,
@@ -758,7 +712,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
             setUserId(session.user.id);
           } else {
-            console.log('[TaskContext] No active session on mount, using local mode.');
+            console.log('[TaskContext] No active Neon Auth session on mount, using local mode.');
             setAuthUser({
               id: localUid,
               email: null,
@@ -772,42 +726,6 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
     }
   }, [checkShouldReset]);
-
-  // Listen to Auth State Changes
-  useEffect(() => {
-    if (!supabaseConfig.enabled || !supabaseConfig.url || !supabaseConfig.anonKey) return;
-    const client = getSupabaseClient(supabaseConfig);
-    if (!client) return;
-
-    const { data: authListener } = client.auth.onAuthStateChange(
-      (event, session) => {
-        console.log('[TaskContext] Auth state changed:', event, session?.user?.id);
-        if (session?.user) {
-          setAuthUser({
-            id: session.user.id,
-            email: session.user.email || null,
-            isAuthenticated: true,
-          });
-          setUserId(session.user.id);
-        } else if (event === 'SIGNED_OUT') {
-          const localUid = getOrCreateUserId();
-          setAuthUser({
-            id: localUid,
-            email: null,
-            isAuthenticated: false,
-          });
-          setUserId(localUid);
-          setSyncStatus('idle');
-          setIsSyncing(false);
-          setSyncErrorMessage(null);
-        }
-      }
-    );
-
-    return () => {
-      authListener.subscription.unsubscribe();
-    };
-  }, [supabaseConfig]);
 
   // Fetch When User Authenticates or Logical Day Changes (e.g. crossing the 4:00 AM reset time)
   useEffect(() => {
@@ -840,7 +758,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setAuthLoading(true);
       setAuthError(null);
 
-      const result = await signInWithEmail(email, password, supabaseConfig);
+      const result = await signInWithEmail(email, password);
       setAuthLoading(false);
 
       if (result.error) {
@@ -870,7 +788,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setAuthLoading(true);
       setAuthError(null);
 
-      const result = await signUpWithEmail(email, password, supabaseConfig);
+      const result = await signUpWithEmail(email, password);
       setAuthLoading(false);
 
       if (result.error) {
@@ -897,7 +815,7 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Sign Out Handler
   const handleSignOut = useCallback(async () => {
     setAuthLoading(true);
-    await signOutUser(supabaseConfig);
+    await signOutUser();
     const localUid = getOrCreateUserId();
     setAuthUser({
       id: localUid,
@@ -917,11 +835,11 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setSyncErrorMessage(null);
   }, [supabaseConfig]);
 
-  // Update Supabase Config
+  // Update Cloud Sync Config
   const updateSupabaseConfig = useCallback(async (newConfig: SupabaseConfig) => {
     setSupabaseConfig(newConfig);
     StorageService.saveSupabaseConfig(newConfig);
-    if (newConfig.enabled && newConfig.url && newConfig.anonKey) {
+    if (newConfig.enabled) {
       if (authUser.isAuthenticated && authUser.id !== 'local-user') {
         refreshTasks();
       } else {
@@ -1161,23 +1079,10 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const client = getSupabaseClient(supabaseConfig);
-        if (client) {
-          try {
-            await client.from('daily_tasks').insert({
-              id: newTask.id,
-              user_id: newTask.user_id,
-              title: newTask.title,
-              notes: newTask.notes,
-              color: newTask.color,
-              completed: newTask.completed,
-              order_index: newTask.order_index,
-              date_assigned: newTask.date_assigned,
-              created_at: newTask.created_at,
-            });
-          } catch (e) {
-            console.warn('Failed to insert daily task to cloud:', e);
-          }
+        try {
+          await createTask(newTask);
+        } catch (e) {
+          console.warn('Failed to insert daily task to Neon Postgres:', e);
         }
       }
 
@@ -1227,43 +1132,29 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       StorageService.saveDailyTasks(updatedTasks);
       playSound('complete');
 
-      // 2. Cloud DB Update: Call move_task_to_date with localToday and update state directly with returned record
+      // 2. Cloud DB Update: Call moveTaskToDate Server Action with localToday and update state directly with returned record
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const supabase = getSupabaseClient(supabaseConfig);
-        if (supabase) {
-          try {
-            const { data, error } = await supabase.rpc('move_task_to_date', { 
-              p_task_id: taskId, 
-              p_new_date: localToday 
+        try {
+          const returnedTask = await moveTaskToDate(taskId, localToday);
+
+          if (returnedTask) {
+            setDailyTasks((prev) => {
+              const next = prev.map((t) =>
+                t.id === taskId
+                  ? {
+                      ...returnedTask,
+                      created_at: nowIso,
+                      is_bonus: Boolean(task.is_bonus),
+                      bounty_started_at: nowIso,
+                    }
+                  : t
+              );
+              StorageService.saveDailyTasks(next);
+              return next;
             });
-
-            await supabase
-              .from('daily_tasks')
-              .update({ created_at: nowIso })
-              .eq('id', taskId);
-
-            if (error) {
-              console.error('[TaskContext] move_task_to_date error:', error);
-            } else if (data) {
-              const returnedTask = data as DailyTask;
-              setDailyTasks((prev) => {
-                const next = prev.map((t) =>
-                  t.id === taskId
-                    ? {
-                        ...returnedTask,
-                        created_at: nowIso,
-                        is_bonus: Boolean(task.is_bonus),
-                        bounty_started_at: nowIso,
-                      }
-                    : t
-                );
-                StorageService.saveDailyTasks(next);
-                return next;
-              });
-            }
-          } catch (e) {
-            console.warn('[TaskContext] moveTaskToToday error:', e);
           }
+        } catch (e) {
+          console.warn('[TaskContext] moveTaskToToday error:', e);
         }
       }
     },
@@ -1279,13 +1170,13 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setDailyTasks(remainingTasks);
     StorageService.saveDailyTasks(remainingTasks);
 
-    // 2. Call Supabase RPC to delete from database
+    // 2. Call Server Action to delete from Neon Postgres
     if (supabaseConfig.enabled && authUser.isAuthenticated) {
       try {
-        await clearAllDailyTasksRPC(supabaseConfig, today);
+        await clearAllDailyTasksAction(today);
         await refreshTasks();
       } catch (err) {
-        console.warn('[TaskContext] clear_all_daily_tasks RPC error:', err);
+        console.warn('[TaskContext] clearAllDailyTasks error:', err);
       }
     }
   }, [dailyTasks, supabaseConfig, authUser.isAuthenticated, refreshTasks]);
@@ -1299,42 +1190,36 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (supabaseConfig.enabled && authUser.isAuthenticated && !specificId) {
         try {
-          const supabase = getSupabaseClient(supabaseConfig);
-          if (supabase) {
-            const { data: bonusTask, error } = await supabase.rpc('pull_bonus_task', {
-              p_today: localToday,
-            });
-            if (error || !bonusTask || typeof bonusTask !== 'object' || !bonusTask.id) {
-              console.log('[TaskContext] No bonus tasks available from cloud.');
-              return null;
-            }
-
-            const enrichedBonus: DailyTask = {
-              ...bonusTask,
-              is_bonus: true,
-            };
-
-            setBountyMetaMap((prev) => {
-              const next = {
-                ...prev,
-                [enrichedBonus.id]: { is_bonus: true, bounty_started_at: enrichedBonus.created_at },
-              };
-              StorageService.saveBountyMetaMap(next);
-              return next;
-            });
-
-            setDailyTasks((prev) => {
-              if (prev.some((t) => t.id === enrichedBonus.id)) return prev;
-              const updated = [...prev, enrichedBonus];
-              StorageService.saveDailyTasks(updated);
-              return updated;
-            });
-            // Preserved: The Bonus Pool acts as an indefinite library/reservoir.
-            // Do NOT remove from poolTasks frontend state or pool_tasks table.
-            return enrichedBonus;
+          const bonusTask = await pullBonusTask(localToday);
+          if (!bonusTask || typeof bonusTask !== 'object' || !bonusTask.id) {
+            console.log('[TaskContext] No bonus tasks available from cloud.');
+            return null;
           }
+
+          const enrichedBonus: DailyTask = {
+            ...bonusTask,
+            is_bonus: true,
+          };
+
+          setBountyMetaMap((prev) => {
+            const next = {
+              ...prev,
+              [enrichedBonus.id]: { is_bonus: true, bounty_started_at: enrichedBonus.created_at },
+            };
+            StorageService.saveBountyMetaMap(next);
+            return next;
+          });
+
+          setDailyTasks((prev) => {
+            if (prev.some((t) => t.id === enrichedBonus.id)) return prev;
+            const updated = [...prev, enrichedBonus];
+            StorageService.saveDailyTasks(updated);
+            return updated;
+          });
+          // Preserved: The Bonus Pool acts as an indefinite library/reservoir.
+          return enrichedBonus;
         } catch (rpcErr) {
-          console.warn('[TaskContext] RPC pull_bonus_task fallback:', rpcErr);
+          console.warn('[TaskContext] pullBonusTask fallback:', rpcErr);
         }
       }
 
@@ -1389,24 +1274,11 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const client = getSupabaseClient(supabaseConfig);
-        if (client) {
-          try {
-            // Only insert into daily_tasks; DO NOT delete from pool_tasks!
-            await client.from('daily_tasks').insert({
-              id: newDailyTask.id,
-              user_id: newDailyTask.user_id,
-              title: newDailyTask.title,
-              notes: newDailyTask.notes,
-              color: newDailyTask.color,
-              completed: newDailyTask.completed,
-              order_index: newDailyTask.order_index,
-              date_assigned: newDailyTask.date_assigned,
-              created_at: newDailyTask.created_at,
-            });
-          } catch (e) {
-            console.warn('Failed to sync pulled bonus task to cloud:', e);
-          }
+        try {
+          // Only insert into daily_tasks; DO NOT delete from pool_tasks!
+          await createTask(newDailyTask);
+        } catch (e) {
+          console.warn('Failed to sync pulled bonus task to cloud:', e);
         }
       }
 
@@ -1447,9 +1319,10 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       setBountyLedger((prev) => {
         const filtered = prev.filter((entry) => entry.taskId !== id);
+        let finalLedger = filtered;
         if (nextCompleted && earnedAmount !== null) {
           const completedDate = task.date_assigned || today;
-          const nextLedger: BountyLedgerEntry[] = [
+          finalLedger = [
             ...filtered,
             {
               taskId: id,
@@ -1461,11 +1334,11 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
               isBonus: isTaskBonusBounty(task, poolTitlesSet),
             },
           ];
-          StorageService.saveBountyLedger(nextLedger);
-          return nextLedger;
         }
-        StorageService.saveBountyLedger(filtered);
-        return filtered;
+        StorageService.saveBountyLedger(finalLedger);
+        const totalClaimed = finalLedger.reduce((sum, entry) => sum + entry.amount, 0);
+        updateSettings({ total_bounty_claimed: totalClaimed });
+        return finalLedger;
       });
 
       // 1. Optimistic Local State Update
@@ -1483,22 +1356,16 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       StorageService.saveDailyTasks(updatedTasks);
       playSound('complete');
 
-      // 2. Await Supabase Database Write FIRST
+      // 2. Await Neon Postgres Database Write FIRST via Server Action
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const client = getSupabaseClient(supabaseConfig);
-        if (client) {
-          try {
-            const { error } = await client
-              .from('daily_tasks')
-              .update({ completed: nextCompleted })
-              .eq('id', id);
-
-            if (error) {
-              console.error('[TaskContext] Error updating task completion in DB:', error);
-            }
-          } catch (e) {
-            console.warn('[TaskContext] Failed to write task completion to cloud:', e);
-          }
+        try {
+          await updateTask(id, {
+            completed: nextCompleted,
+            bounty_earned: earnedAmount,
+            completed_at: nextCompleted ? nowIso : null,
+          });
+        } catch (e) {
+          console.warn('[TaskContext] Failed to write task completion to cloud:', e);
         }
       }
 
@@ -1525,50 +1392,43 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
             return;
           }
 
-          // Continuous Bonus Pull via RPC (Guarded against null/empty)
+          // Continuous Bonus Pull via Server Action (Guarded against null/empty)
           if (supabaseConfig.enabled && authUser.isAuthenticated) {
-            const client = getSupabaseClient(supabaseConfig);
-            if (client) {
-              try {
-                const localToday = getLocalDateString();
-                const { data: bonusTask, error } = await client.rpc('pull_bonus_task', {
-                  p_today: localToday,
-                });
-                if (error || !bonusTask || typeof bonusTask !== 'object' || !bonusTask.id) {
-                  console.log('[TaskContext] No bonus tasks available in pool.');
-                  return;
-                }
-
-                const enrichedBonus: DailyTask = {
-                  ...bonusTask,
-                  is_bonus: true,
-                };
-
-                setBountyMetaMap((prev) => {
-                  const next = {
-                    ...prev,
-                    [enrichedBonus.id]: {
-                      is_bonus: true,
-                      bounty_started_at: enrichedBonus.created_at,
-                    },
-                  };
-                  StorageService.saveBountyMetaMap(next);
-                  return next;
-                });
-
-                console.log('[TaskContext] Continuous bonus task pulled:', enrichedBonus);
-                setDailyTasks((prev) => {
-                  if (prev.some((t) => t.id === enrichedBonus.id)) return prev;
-                  const next = [...prev, enrichedBonus];
-                  StorageService.saveDailyTasks(next);
-                  return next;
-                });
-                // Preserved: The Bonus Pool acts as an indefinite library/reservoir.
-                // Pulling only instantiates a new copy into dailyTasks.
-                await refreshTasks();
-              } catch (rpcErr) {
-                console.warn('[TaskContext] pull_bonus_task RPC failed:', rpcErr);
+            try {
+              const localToday = getLocalDateString();
+              const bonusTask = await pullBonusTask(localToday);
+              if (!bonusTask || typeof bonusTask !== 'object' || !bonusTask.id) {
+                console.log('[TaskContext] No bonus tasks available in pool.');
+                return;
               }
+
+              const enrichedBonus: DailyTask = {
+                ...bonusTask,
+                is_bonus: true,
+              };
+
+              setBountyMetaMap((prev) => {
+                const next = {
+                  ...prev,
+                  [enrichedBonus.id]: {
+                    is_bonus: true,
+                    bounty_started_at: enrichedBonus.created_at,
+                  },
+                };
+                StorageService.saveBountyMetaMap(next);
+                return next;
+              });
+
+              console.log('[TaskContext] Continuous bonus task pulled:', enrichedBonus);
+              setDailyTasks((prev) => {
+                if (prev.some((t) => t.id === enrichedBonus.id)) return prev;
+                const next = [...prev, enrichedBonus];
+                StorageService.saveDailyTasks(next);
+                return next;
+              });
+              await refreshTasks();
+            } catch (rpcErr) {
+              console.warn('[TaskContext] pullBonusTask failed:', rpcErr);
             }
           } else {
             // Local/offline continuous pull
@@ -1608,13 +1468,10 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const client = getSupabaseClient(supabaseConfig);
-        if (client) {
-          try {
-            await client.from('daily_tasks').update({ title: newTitle.trim() }).eq('id', id);
-          } catch (e) {
-            console.warn('Failed to update task title on cloud:', e);
-          }
+        try {
+          await updateTask(id, { title: newTitle.trim() });
+        } catch (e) {
+          console.warn('Failed to update task title on cloud:', e);
         }
       }
     },
@@ -1632,13 +1489,10 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const client = getSupabaseClient(supabaseConfig);
-        if (client) {
-          try {
-            await client.from('daily_tasks').update({ notes: formattedNotes }).eq('id', id);
-          } catch (e) {
-            console.warn('Failed to update task notes on cloud:', e);
-          }
+        try {
+          await updateTask(id, { notes: formattedNotes });
+        } catch (e) {
+          console.warn('Failed to update task notes on cloud:', e);
         }
       }
     },
@@ -1656,13 +1510,10 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const client = getSupabaseClient(supabaseConfig);
-        if (client) {
-          try {
-            await client.from('daily_tasks').update({ color: formattedColor }).eq('id', id);
-          } catch (e) {
-            console.warn('Failed to update task color on cloud:', e);
-          }
+        try {
+          await updateTask(id, { color: formattedColor });
+        } catch (e) {
+          console.warn('Failed to update task color on cloud:', e);
         }
       }
     },
@@ -1679,13 +1530,10 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const client = getSupabaseClient(supabaseConfig);
-        if (client) {
-          try {
-            await client.from('daily_tasks').delete().eq('id', id);
-          } catch (e) {
-            console.warn('Failed to delete daily task from cloud:', e);
-          }
+        try {
+          await deleteTask(id);
+        } catch (e) {
+          console.warn('Failed to delete daily task from cloud:', e);
         }
       }
     },
@@ -1718,16 +1566,12 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       StorageService.saveDailyTasks(allUpdated);
 
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const client = getSupabaseClient(supabaseConfig);
-        if (client) {
-          try {
-            const updates = reordered.map((t) =>
-              client.from('daily_tasks').update({ order_index: t.order_index }).eq('id', t.id)
-            );
-            await Promise.all(updates);
-          } catch (e) {
-            console.warn('Failed to sync reorder to cloud:', e);
-          }
+        try {
+          await reorderTasks(
+            reordered.map((t) => ({ id: t.id, order_index: t.order_index }))
+          );
+        } catch (e) {
+          console.warn('Failed to sync reorder to cloud:', e);
         }
       }
     },
@@ -1756,13 +1600,10 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const client = getSupabaseClient(supabaseConfig);
-        if (client) {
-          try {
-            await client.from('pool_tasks').insert(newPoolTask);
-          } catch (e) {
-            console.warn('Failed to insert pool task to cloud:', e);
-          }
+        try {
+          await createPoolTask(newPoolTask);
+        } catch (e) {
+          console.warn('Failed to insert pool task to cloud:', e);
         }
       }
     },
@@ -1779,13 +1620,10 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const client = getSupabaseClient(supabaseConfig);
-        if (client) {
-          try {
-            await client.from('pool_tasks').delete().eq('id', id);
-          } catch (e) {
-            console.warn('Failed to delete pool task from cloud:', e);
-          }
+        try {
+          await deletePoolTaskAction(id);
+        } catch (e) {
+          console.warn('Failed to delete pool task from cloud:', e);
         }
       }
     },
@@ -1824,13 +1662,10 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const client = getSupabaseClient(supabaseConfig);
-        if (client) {
-          try {
-            await client.from('recurring_tasks').insert(newRecurring);
-          } catch (e) {
-            console.warn('[TaskContext] Failed to insert recurring task to cloud:', e);
-          }
+        try {
+          await createRecurringTask(newRecurring);
+        } catch (e) {
+          console.warn('[TaskContext] Failed to insert recurring task to cloud:', e);
         }
       }
     },
@@ -1846,13 +1681,10 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const client = getSupabaseClient(supabaseConfig);
-        if (client) {
-          try {
-            await client.from('recurring_tasks').update(updates).eq('id', id);
-          } catch (e) {
-            console.warn('[TaskContext] Failed to update recurring task on cloud:', e);
-          }
+        try {
+          await updateRecurringTaskAction(id, updates);
+        } catch (e) {
+          console.warn('[TaskContext] Failed to update recurring task on cloud:', e);
         }
       }
     },
@@ -1868,13 +1700,10 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const client = getSupabaseClient(supabaseConfig);
-        if (client) {
-          try {
-            await client.from('recurring_tasks').delete().eq('id', id);
-          } catch (e) {
-            console.warn('[TaskContext] Failed to delete recurring task on cloud:', e);
-          }
+        try {
+          await deleteRecurringTaskAction(id);
+        } catch (e) {
+          console.warn('[TaskContext] Failed to delete recurring task on cloud:', e);
         }
       }
     },
@@ -1912,54 +1741,46 @@ export const TaskProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       if (supabaseConfig.enabled && authUser.isAuthenticated) {
-        const client = getSupabaseClient(supabaseConfig);
-        if (client) {
-          try {
-            const { data: newTask, error } = await client.rpc('push_template_to_daily', {
-              p_title: trimmed,
-              p_notes: trimmedNotes,
-              p_color: taskColor,
-              p_target_date: todayStr,
+        try {
+          const newTask = await pushTemplateToDaily(
+            trimmed,
+            trimmedNotes,
+            taskColor,
+            todayStr
+          );
+
+          if (newTask) {
+            const nowIso = newTask.created_at || new Date().toISOString();
+            const enriched: DailyTask = {
+              ...newTask,
+              is_bonus: false,
+              bounty_started_at: nowIso,
+            };
+            setBountyMetaMap((prev) => {
+              const next = {
+                ...prev,
+                [enriched.id]: { is_bonus: false, bounty_started_at: nowIso },
+              };
+              StorageService.saveBountyMetaMap(next);
+              return next;
             });
-
-            if (error) {
-              console.warn('[TaskContext] push_template_to_daily error:', error);
-            }
-
-            if (newTask) {
-              const nowIso = newTask.created_at || new Date().toISOString();
-              const enriched: DailyTask = {
-                ...newTask,
-                is_bonus: false,
-                bounty_started_at: nowIso,
-              };
-              setBountyMetaMap((prev) => {
-                const next = {
-                  ...prev,
-                  [enriched.id]: { is_bonus: false, bounty_started_at: nowIso },
-                };
-                StorageService.saveBountyMetaMap(next);
-                return next;
-              });
-              setDailyTasks((prev) => {
-                if (prev.some((t) => t.id === enriched.id)) return prev;
-                const next = [...prev, enriched];
-                StorageService.saveDailyTasks(next);
-                return next;
-              });
-              await refreshTasks();
-              return { success: true, task: enriched };
-            } else {
-              // RPC returned null because task already exists active in database
-              return {
-                success: false,
-                duplicate: true,
-                message: 'Task is already active on today’s list',
-              };
-            }
-          } catch (e) {
-            console.warn('[TaskContext] push_template_to_daily exception:', e);
+            setDailyTasks((prev) => {
+              if (prev.some((t) => t.id === enriched.id)) return prev;
+              const next = [...prev, enriched];
+              StorageService.saveDailyTasks(next);
+              return next;
+            });
+            await refreshTasks();
+            return { success: true, task: enriched };
+          } else {
+            return {
+              success: false,
+              duplicate: true,
+              message: 'Task is already active on today’s list',
+            };
           }
+        } catch (e) {
+          console.warn('[TaskContext] push_template_to_daily exception:', e);
         }
       }
 

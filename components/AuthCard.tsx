@@ -31,8 +31,8 @@ export const AuthCard: React.FC = () => {
     setSuccessMessage(null);
     setAuthError(null);
 
-    if (!supabaseConfig.enabled || !supabaseConfig.url || !supabaseConfig.anonKey) {
-      setAuthError('Please configure your Supabase Project URL & Anon Key below first.');
+    if (!supabaseConfig.enabled) {
+      setAuthError('Please enable Neon Cloud Sync below first.');
       return;
     }
 
@@ -41,20 +41,20 @@ export const AuthCard: React.FC = () => {
       return;
     }
 
-    if (password.length < 6) {
-      setAuthError('Password must be at least 6 characters.');
+    if (password.length < 8) {
+      setAuthError('Password must be at least 8 characters.');
       return;
     }
 
     if (mode === 'signin') {
       const ok = await handleSignIn(email, password);
       if (ok) {
-        setSuccessMessage('Signed in successfully.');
+        setSuccessMessage('Signed in to Neon Auth successfully.');
       }
     } else {
       const ok = await handleSignUp(email, password);
       if (ok) {
-        setSuccessMessage('Account created. Check your email for confirmation if required.');
+        setSuccessMessage('Neon Auth account created and signed in.');
       }
     }
   };
@@ -90,10 +90,10 @@ export const AuthCard: React.FC = () => {
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div>
           <h3 className="font-serif tracking-tight font-bold text-sm sm:text-base text-[#1F1D1A] dark:text-[#EDE8E1]">
-            Account Credentials
+            Neon Auth Credentials
           </h3>
           <p className="text-xs text-[#70685E] dark:text-[#8C8479]">
-            Sign in to protect your ledger with Row-Level Security.
+            Sign in with Neon Auth to synchronize your ledger with Neon Postgres.
           </p>
         </div>
 
@@ -171,9 +171,9 @@ export const AuthCard: React.FC = () => {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Minimum 6 characters"
+            placeholder="Minimum 8 characters"
             required
-            minLength={6}
+            minLength={8}
             className="w-full text-sm bg-[#F7F5F0] dark:bg-[#151413] border border-[#E2DDD5] dark:border-[#2E2A26] rounded-md px-3 py-2 text-[#1F1D1A] dark:text-[#EDE8E1] placeholder-[#70685E]/50 focus:outline-none focus:border-[#8B5E3C] dark:focus:border-[#D4A373]"
           />
         </div>

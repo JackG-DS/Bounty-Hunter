@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   CheckCircle2,
   AlertCircle,
@@ -10,11 +10,22 @@ import {
   Code2,
   Copy,
   Check,
+  Database,
 } from 'lucide-react';
 import { useTaskContext } from '@/context/TaskContext';
 import { SupabaseConfig } from '@/lib/types';
 import { getLocalDateString } from '@/lib/dateUtils';
 import { AuthCard } from './AuthCard';
+
+interface NeonStatusInfo {
+  configured: boolean;
+  databaseConnected: boolean;
+  databaseName: string | null;
+  authConfigured: boolean;
+  branch: string;
+  branchId: string;
+  error: string | null;
+}
 
 export const SettingsModal: React.FC = () => {
   const {
@@ -30,23 +41,31 @@ export const SettingsModal: React.FC = () => {
     poolTasks,
   } = useTaskContext();
 
-  const [url, setUrl] = useState(supabaseConfig.url || '');
-  const [anonKey, setAnonKey] = useState(supabaseConfig.anonKey || '');
   const [enabled, setEnabled] = useState(supabaseConfig.enabled);
   const [copiedSchema, setCopiedSchema] = useState(false);
   const [showSql, setShowSql] = useState(false);
-  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [neonStatus, setNeonStatus] = useState<NeonStatusInfo | null>(null);
 
-  const handleSaveConfig = async (e: React.FormEvent) => {
-    e.preventDefault();
+  useEffect(() => {
+    setEnabled(supabaseConfig.enabled);
+  }, [supabaseConfig.enabled]);
+
+  useEffect(() => {
+    fetch('/api/neon/status', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => setNeonStatus(data))
+      .catch(() => setNeonStatus(null));
+  }, []);
+
+  const handleToggleEnabled = async () => {
+    const nextEnabled = !enabled;
+    setEnabled(nextEnabled);
     const newConfig: SupabaseConfig = {
-      url: url.trim(),
-      anonKey: anonKey.trim(),
-      enabled: enabled && Boolean(url.trim() && anonKey.trim()),
+      url: 'neon-postgres',
+      anonKey: 'neon-auth',
+      enabled: nextEnabled,
     };
     await updateSupabaseConfig(newConfig);
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 2000);
   };
 
   const handleExportData = () => {
@@ -68,7 +87,7 @@ export const SettingsModal: React.FC = () => {
   const schemaSQL = `-- 1. Create Daily Tasks Table
 create table if not exists public.daily_tasks (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade default auth.uid(),
+  user_id uuid not null references neon_auth."user"(id) on delete cascade,
   title text not null,
   notes text,
   color text,
@@ -81,7 +100,7 @@ create table if not exists public.daily_tasks (
 -- 2. Create Bonus Pool Tasks Table
 create table if not exists public.pool_tasks (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade default auth.uid(),
+  user_id uuid not null references neon_auth."user"(id) on delete cascade,
   title text not null,
   notes text,
   color text,
@@ -91,7 +110,7 @@ create table if not exists public.pool_tasks (
 -- 3. Create Recurring Tasks Table
 create table if not exists public.recurring_tasks (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users(id) on delete cascade default auth.uid(),
+  user_id uuid not null references neon_auth."user"(id) on delete cascade,
   title text not null,
   notes text,
   color text,
@@ -102,7 +121,7 @@ create table if not exists public.recurring_tasks (
 
 -- 4. Create User Settings Table
 create table if not exists public.user_settings (
-  user_id uuid primary key references auth.users(id) on delete cascade default auth.uid(),
+  user_id uuid primary key references neon_auth."user"(id) on delete cascade,
   reset_time text not null default '04:00',
   last_reset_date date,
   day_ended_date date,
@@ -123,28 +142,28 @@ create table if not exists public.user_settings (
           Settings &amp; Telegraph Sync
         </h2>
         <p className="text-xs sm:text-sm text-[#70685E] dark:text-[#8C8479] mt-0.5">
-          Manage cloud database synchronization, credentials, and ledger preferences.
+          Manage Neon Serverless Postgres synchronization, Neon Auth credentials, and ledger preferences.
         </p>
       </div>
 
-      {/* Supabase User Authentication Card */}
+      {/* Neon Auth User Authentication Card */}
       <AuthCard />
 
-      {/* Cloud Sync Config Card */}
+      {/* Neon Cloud Sync Config Card */}
       <div className="p-4 sm:p-5 rounded-lg bg-[#FFFDF9] dark:bg-[#1E1C1A] border border-[#E2DDD5] dark:border-[#2E2A26] shadow-[0_1px_3px_rgba(0,0,0,0.02)] space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="font-serif tracking-tight font-bold text-sm sm:text-base text-[#1F1D1A] dark:text-[#EDE8E1]">
-              Supabase Cloud Sync
+              Neon Cloud Sync
             </h3>
             <p className="text-xs text-[#70685E] dark:text-[#8C8479] mt-0.5">
-              Synchronize ledger entries across devices.
+              Powered by Neon Serverless Postgres &amp; Neon Auth.
             </p>
           </div>
 
           <button
             type="button"
-            onClick={() => setEnabled(!enabled)}
+            onClick={handleToggleEnabled}
             className={`font-mono text-xs tracking-wider uppercase px-2.5 py-1 rounded border transition-colors ${
               enabled
                 ? 'bg-[#1F1D1A] dark:bg-[#EDE8E1] text-[#FFFDF9] dark:text-[#151413] border-[#1F1D1A] dark:border-[#EDE8E1] font-semibold'
@@ -193,73 +212,71 @@ create table if not exists public.user_settings (
           )}
         </div>
 
-        {/* Credentials Form */}
-        <form onSubmit={handleSaveConfig} className="space-y-3 pt-1">
-          <div>
-            <label className="block font-mono text-xs tracking-wider uppercase text-[#70685E] dark:text-[#8C8479] mb-1">
-              Supabase Project URL
-            </label>
-            <input
-              type="text"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://xyzcompany.supabase.co"
-              className="w-full font-mono text-xs bg-[#F7F5F0] dark:bg-[#151413] border border-[#E2DDD5] dark:border-[#2E2A26] rounded-md px-3 py-2 text-[#1F1D1A] dark:text-[#EDE8E1] placeholder-[#70685E]/50 focus:outline-none focus:border-[#8B5E3C] dark:focus:border-[#D4A373]"
-            />
-          </div>
-
-          <div>
-            <label className="block font-mono text-xs tracking-wider uppercase text-[#70685E] dark:text-[#8C8479] mb-1">
-              Supabase Anon Public Key
-            </label>
-            <input
-              type="password"
-              value={anonKey}
-              onChange={(e) => setAnonKey(e.target.value)}
-              placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
-              className="w-full font-mono text-xs bg-[#F7F5F0] dark:bg-[#151413] border border-[#E2DDD5] dark:border-[#2E2A26] rounded-md px-3 py-2 text-[#1F1D1A] dark:text-[#EDE8E1] placeholder-[#70685E]/50 focus:outline-none focus:border-[#8B5E3C] dark:focus:border-[#D4A373]"
-            />
-          </div>
-
-          <div className="flex items-center justify-between pt-1">
-            <button
-              type="button"
-              onClick={() => setShowSql(!showSql)}
-              className="font-mono text-xs tracking-wider uppercase text-[#8B5E3C] dark:text-[#D4A373] hover:underline flex items-center gap-1"
-            >
-              <Code2 className="w-3.5 h-3.5" />
-              <span>{showSql ? 'Hide SQL Schema' : 'View SQL Schema'}</span>
-            </button>
-
-            <button
-              type="submit"
-              className="bg-[#1F1D1A] dark:bg-[#EDE8E1] text-[#FFFDF9] dark:text-[#151413] hover:opacity-90 text-xs font-medium uppercase tracking-wider px-3.5 py-2 rounded-md transition-opacity flex items-center gap-1.5"
-            >
-              {saveSuccess ? <Check className="w-3.5 h-3.5" /> : null}
-              <span>{saveSuccess ? 'Saved' : 'Save & Connect'}</span>
-            </button>
-          </div>
-
-          {/* SQL Snippet View */}
-          {showSql && (
-            <div className="p-3 bg-[#F2EFE9]/40 dark:bg-[#181615]/50 border border-[#E2DDD5] dark:border-[#2E2A26] rounded text-xs space-y-2 mt-2">
-              <div className="flex items-center justify-between font-mono text-xs tracking-wider text-[#70685E] dark:text-[#8C8479]">
-                <span>SUPABASE SQL SCHEMA</span>
-                <button
-                  type="button"
-                  onClick={copySql}
-                  className="hover:text-[#1F1D1A] dark:hover:text-[#EDE8E1] flex items-center gap-1"
-                >
-                  {copiedSchema ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                  <span>{copiedSchema ? 'Copied' : 'Copy'}</span>
-                </button>
-              </div>
-              <pre className="overflow-x-auto text-[11px] font-mono leading-relaxed p-2.5 bg-[#F7F5F0] dark:bg-[#151413] border border-[#E2DDD5] dark:border-[#2E2A26] rounded max-h-56 text-[#1F1D1A] dark:text-[#EDE8E1]">
-                {schemaSQL}
-              </pre>
+        {/* Neon Service Status Summary */}
+        {neonStatus && (
+          <div className="p-2.5 bg-[#F7F5F0] dark:bg-[#151413] border border-[#E2DDD5] dark:border-[#2E2A26] rounded font-mono text-xs tracking-wider space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[#70685E] dark:text-[#8C8479] flex items-center gap-1.5">
+                <Database className="w-3.5 h-3.5" />
+                <span>NEON POSTGRES ({neonStatus.branch}):</span>
+              </span>
+              <span
+                className={
+                  neonStatus.databaseConnected
+                    ? 'text-[#1F1D1A] dark:text-[#EDE8E1] font-semibold'
+                    : 'text-[#9E2A2B] dark:text-[#C94A4B] font-semibold'
+                }
+              >
+                {neonStatus.databaseConnected
+                  ? `CONNECTED (${neonStatus.databaseName || 'neondb'})`
+                  : 'DISCONNECTED'}
+              </span>
             </div>
-          )}
-        </form>
+            <div className="flex items-center justify-between">
+              <span className="text-[#70685E] dark:text-[#8C8479]">NEON AUTH:</span>
+              <span
+                className={
+                  neonStatus.authConfigured
+                    ? 'text-[#1F1D1A] dark:text-[#EDE8E1] font-semibold'
+                    : 'text-[#9E2A2B] dark:text-[#C94A4B] font-semibold'
+                }
+              >
+                {neonStatus.authConfigured ? 'CONFIGURED' : 'NOT CONFIGURED'}
+              </span>
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between pt-1">
+          <button
+            type="button"
+            onClick={() => setShowSql(!showSql)}
+            className="font-mono text-xs tracking-wider uppercase text-[#8B5E3C] dark:text-[#D4A373] hover:underline flex items-center gap-1"
+          >
+            <Code2 className="w-3.5 h-3.5" />
+            <span>{showSql ? 'Hide SQL Schema' : 'View SQL Schema'}</span>
+          </button>
+        </div>
+
+        {/* SQL Snippet View */}
+        {showSql && (
+          <div className="p-3 bg-[#F2EFE9]/40 dark:bg-[#181615]/50 border border-[#E2DDD5] dark:border-[#2E2A26] rounded text-xs space-y-2 mt-2">
+            <div className="flex items-center justify-between font-mono text-xs tracking-wider text-[#70685E] dark:text-[#8C8479]">
+              <span>NEON POSTGRES SQL SCHEMA</span>
+              <button
+                type="button"
+                onClick={copySql}
+                className="hover:text-[#1F1D1A] dark:hover:text-[#EDE8E1] flex items-center gap-1"
+              >
+                {copiedSchema ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                <span>{copiedSchema ? 'Copied' : 'Copy'}</span>
+              </button>
+            </div>
+            <pre className="overflow-x-auto text-[11px] font-mono leading-relaxed p-2.5 bg-[#F7F5F0] dark:bg-[#151413] border border-[#E2DDD5] dark:border-[#2E2A26] rounded max-h-56 text-[#1F1D1A] dark:text-[#EDE8E1]">
+              {schemaSQL}
+            </pre>
+          </div>
+        )}
       </div>
 
       {/* App Preferences */}

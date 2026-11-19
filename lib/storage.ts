@@ -13,7 +13,7 @@ const STORAGE_KEYS = {
   POOL_TASKS: 'antigravity_pool_tasks_v1',
   RECURRING_TASKS: 'antigravity_recurring_tasks_v1',
   SETTINGS: 'antigravity_settings_v1',
-  SUPABASE_CONFIG: 'antigravity_supabase_config_v1',
+  SUPABASE_CONFIG: 'antigravity_neon_config_v1',
   SYNC_QUEUE: 'antigravity_sync_queue_v1',
   USER_ID: 'antigravity_user_id_v1',
   BOUNTY_META: 'antigravity_bounty_meta_v1',
@@ -326,22 +326,25 @@ export const StorageService = {
 
   getSupabaseConfig(): SupabaseConfig {
     if (typeof window === 'undefined') {
-      return { url: '', anonKey: '', enabled: false };
+      return { url: 'neon-postgres', anonKey: 'neon-auth', enabled: true };
     }
     const raw = localStorage.getItem(STORAGE_KEYS.SUPABASE_CONFIG);
     if (!raw) {
-      const envUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-      const envKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
       return {
-        url: envUrl,
-        anonKey: envKey,
-        enabled: Boolean(envUrl && envKey),
+        url: 'neon-postgres',
+        anonKey: 'neon-auth',
+        enabled: true,
       };
     }
     try {
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      return {
+        url: parsed.url || 'neon-postgres',
+        anonKey: parsed.anonKey || 'neon-auth',
+        enabled: parsed.enabled ?? true,
+      };
     } catch {
-      return { url: '', anonKey: '', enabled: false };
+      return { url: 'neon-postgres', anonKey: 'neon-auth', enabled: true };
     }
   },
 

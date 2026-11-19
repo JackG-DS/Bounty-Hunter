@@ -50,6 +50,7 @@ export interface PoolTask {
   title: string;
   notes?: string | null;
   color?: string | null;
+  bounty_amount?: number | null;
   created_at: string;
 }
 
@@ -89,6 +90,7 @@ export interface UserSettings {
   reset_time: string; // HH:MM, default "04:00"
   last_reset_date?: string; // YYYY-MM-DD
   day_ended_date?: string | null; // YYYY-MM-DD when user clicks "End Day"
+  total_bounty_claimed?: number;
 }
 
 export type ActiveTab = 'today' | 'pool' | 'recurring' | 'history' | 'settings';

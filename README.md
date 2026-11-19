@@ -1,6 +1,6 @@
 # Bounty Hunter - Most Wanted & Bounties To-Do PWA
 
-A responsive, high-performance To-Do List Progressive Web App (PWA) built with **Next.js (App Router)**, **Tailwind CSS**, **@dnd-kit**, **Lucide Icons**, and **Supabase Real-Time Cloud Sync**.
+A responsive, high-performance To-Do List Progressive Web App (PWA) built with **Next.js (App Router)**, **Tailwind CSS**, **@dnd-kit**, **Lucide Icons**, **Neon Serverless Postgres**, and **Neon Auth**.
 
 ---
 
@@ -21,9 +21,9 @@ A responsive, high-performance To-Do List Progressive Web App (PWA) built with *
    - **Auto-Reward Trigger**: Completing 100% of today's active tasks fires a celebration (`canvas-confetti`), chimes audio rewards, and pulls **one random task** from the bonus pool into today's daily focus.
    - Guards against duplicate triggers within the same day.
 
-4. **Real-Time Cloud Sync & Local-First Offline Mode**:
+4. **Neon Cloud Sync & Local-First Offline Mode**:
    - **Zero configuration required to start**: Works instantly offline via LocalStorage persistence.
-   - Optional **Supabase Real-Time sync**: Enter Supabase URL & Anon Key in the **Settings** tab or `.env.local` to enable instant multi-device cloud synchronization via PostgreSQL and Supabase.
+   - **Neon Serverless Postgres & Neon Auth sync**: Configure `DATABASE_URL`, `NEON_AUTH_BASE_URL`, and `NEON_AUTH_COOKIE_SECRET` in `.env.local` to enable multi-device cloud synchronization via Neon Serverless Postgres (`@neondatabase/serverless`) and Neon Auth (`@neondatabase/auth`).
 
 5. **Progressive Web App (PWA)**:
    - Web App Manifest (`/manifest.json`) and Service Worker (`/sw.js`) for offline caching.
@@ -48,9 +48,9 @@ npm run start
 
 ---
 
-## 🗄️ Supabase Cloud Sync Setup (Optional)
+## 🗄️ Neon Cloud Sync Setup
 
-1. Create a project in [Supabase](https://supabase.com).
-2. Go to **SQL Editor** and execute the script provided in `supabase/schema.sql`.
-3. Copy your **Project URL** and **anon public API Key**.
-4. In the Bounty Hunter app, navigate to the **Settings** tab, toggle **Supabase Cloud Sync** to Enabled, paste your credentials, and tap **Save & Connect**.
+1. Link and deploy your Neon project services (`postgres`, `auth`) via `neon init` and `neon deploy`.
+2. Ensure `.env.local` contains `DATABASE_URL`, `NEON_AUTH_BASE_URL`, and `NEON_AUTH_COOKIE_SECRET`.
+3. Apply the schema in `neon/schema.sql`.
+4. Sign in or register in the **Settings** tab to synchronize your ledger with Neon Serverless Postgres.
