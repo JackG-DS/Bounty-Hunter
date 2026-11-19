@@ -64,7 +64,7 @@ export const PWAInstallBanner: React.FC = () => {
       <div className="p-3.5 bg-[#FFFDF9] dark:bg-[#1E1C1A] border border-[#E2DDD5] dark:border-[#2E2A26] rounded-lg shadow-[0_1px_3px_rgba(0,0,0,0.02)] flex items-center justify-between gap-2 animate-fade-in">
         <div>
           <p className="font-serif tracking-tight font-bold text-sm text-[#1F1D1A] dark:text-[#EDE8E1]">
-            Install BountyList Edition
+            Install Bounty Hunter Edition
           </p>
           <p className="font-mono text-xs tracking-wider text-[#70685E] dark:text-[#8C8479] mt-0.5">
             Add to your home screen for offline ledger access

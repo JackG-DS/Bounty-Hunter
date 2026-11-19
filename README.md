@@ -1,4 +1,4 @@
-# BountyList - Most Wanted & Bounties To-Do PWA
+# Bounty Hunter - Most Wanted & Bounties To-Do PWA
 
 A responsive, high-performance To-Do List Progressive Web App (PWA) built with **Next.js (App Router)**, **Tailwind CSS**, **@dnd-kit**, **Lucide Icons**, and **Supabase Real-Time Cloud Sync**.
 
@@ -17,13 +17,13 @@ A responsive, high-performance To-Do List Progressive Web App (PWA) built with *
    - Displays a banner highlighting rolled-over tasks.
 
 3. **Bonus Task Pool & Completion Rewards**:
-   - Manage ideas and secondary tasks in the **Bonus Pool** tab.
-   - **Auto-Reward Trigger**: Completing 100% of today's active tasks fires a colorful celebration (`canvas-confetti`), chimes audio rewards, and pulls **one random task** from the bonus pool into today's daily focus.
+   - Manage ideas and secondary tasks in the **Bounties** tab.
+   - **Auto-Reward Trigger**: Completing 100% of today's active tasks fires a celebration (`canvas-confetti`), chimes audio rewards, and pulls **one random task** from the bonus pool into today's daily focus.
    - Guards against duplicate triggers within the same day.
 
 4. **Real-Time Cloud Sync & Local-First Offline Mode**:
-   - **Zero configuration required to start**: Works instantly offline via LocalStorage / IndexedDB persistence.
-   - Optional **Supabase Real-Time sync**: Enter Supabase URL & Anon Key in the **Sync & Config** tab or `.env.local` to enable instant multi-device cloud synchronization via PostgreSQL and Supabase Realtime subscriptions.
+   - **Zero configuration required to start**: Works instantly offline via LocalStorage persistence.
+   - Optional **Supabase Real-Time sync**: Enter Supabase URL & Anon Key in the **Settings** tab or `.env.local` to enable instant multi-device cloud synchronization via PostgreSQL and Supabase.
 
 5. **Progressive Web App (PWA)**:
    - Web App Manifest (`/manifest.json`) and Service Worker (`/sw.js`) for offline caching.
@@ -53,4 +53,4 @@ npm run start
 1. Create a project in [Supabase](https://supabase.com).
 2. Go to **SQL Editor** and execute the script provided in `supabase/schema.sql`.
 3. Copy your **Project URL** and **anon public API Key**.
-4. In the FocusDay app, navigate to the **Sync & Config** tab, toggle **Supabase Real-Time Cloud Sync** to ON, paste your credentials, and tap **Save & Connect**.
+4. In the Bounty Hunter app, navigate to the **Settings** tab, toggle **Supabase Cloud Sync** to Enabled, paste your credentials, and tap **Save & Connect**.

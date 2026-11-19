@@ -1,6 +1,6 @@
 -- ====================================================================
 -- SUPABASE SCHEMA, RLS POLICIES & HELPER FUNCTIONS
--- Project: FocusDay To-Do List Progressive Web App
+-- Project: Bounty Hunter To-Do List Progressive Web App
 -- Features: Daily Tasks, Bonus Pool, Recurring Tasks, Colors, End Day & RPCs
 -- ====================================================================
 

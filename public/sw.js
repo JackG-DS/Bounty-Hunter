@@ -1,5 +1,5 @@
-// BountyList PWA Service Worker
-const CACHE_NAME = 'focusday-cache-v1';
+// Bounty Hunter PWA Service Worker
+const CACHE_NAME = 'bounty-hunter-cache-v1';
 const PRECACHE_ASSETS = [
   '/',
   '/manifest.json',

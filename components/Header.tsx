@@ -45,7 +45,7 @@ export const Header: React.FC = () => {
           <div className="min-w-0">
             <div className="flex items-baseline gap-2.5">
               <h1 className="font-serif tracking-tight font-bold text-lg sm:text-xl text-[#1F1D1A] dark:text-[#EDE8E1] leading-none">
-                BountyList
+                Bounty Hunter
               </h1>
               <span className="font-mono text-[10px] uppercase tracking-widest text-[#70685E] dark:text-[#8C8479] border-l border-[#E2DDD5] dark:border-[#2E2A26] pl-2">
                 LEDGER

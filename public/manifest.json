@@ -1,11 +1,11 @@
 {
-  "name": "BountyList - Most Wanted & Bounties",
-  "short_name": "BountyList",
+  "name": "Bounty Hunter - Most Wanted & Bounties",
+  "short_name": "Bounty Hunter",
   "description": "Track your Most Wanted targets and claim extra Bounties with auto midnight rollover.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#090d16",
-  "theme_color": "#10b981",
+  "background_color": "#151413",
+  "theme_color": "#151413",
   "orientation": "portrait-primary",
   "icons": [
     {
